@@ -22,6 +22,7 @@ full 3:00, level up, pick upgrades, chase the combo.
   combo, accuracy, time survived). Touching an enemy costs HP — at 0 HP the
   orb shatters and the round ends. Press `R` or click to play again.
 - **Pause:** `P` or `Esc`.
+- **Music:** a procedural synthwave loop (bass + arpeggio + pad over Am–F–C–G), synthesised live with WebAudio — no audio files. Press `M` to mute / unmute.
 
 ## What's inside
 

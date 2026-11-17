@@ -120,7 +120,7 @@
       Survive the full 3:00. Level up, pick upgrades, chase the combo.</div>
     <div class="keys">
       <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>↑</kbd><kbd>↓</kbd><kbd>→</kbd> move &nbsp;·&nbsp; mouse steers the orb<br>
-      <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> pick upgrades &nbsp;·&nbsp; <kbd>P</kbd> pause &nbsp;·&nbsp; <kbd>R</kbd> restart
+      <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> pick upgrades &nbsp;·&nbsp; <kbd>P</kbd> pause &nbsp;·&nbsp; <kbd>R</kbd> restart &nbsp;·&nbsp; <kbd>M</kbd> music
     </div>
     <div class="cta">— CLICK OR PRESS ENTER TO START —</div>
   </div>
@@ -145,7 +145,7 @@
   </div>
 
   <div id="pause" class="hidden">❚❚ PAUSED — PRESS P TO RESUME</div>
-  <div id="hint">WASD / ARROWS / MOUSE TO MOVE · LASERS FIRE THEMSELVES · P PAUSE</div>
+  <div id="hint">WASD / ARROWS / MOUSE TO MOVE · LASERS FIRE THEMSELVES · P PAUSE · M MUSIC</div>
 </div>
 <script>
 'use strict';
@@ -190,6 +190,7 @@ const scoreEl=$('score'), killsEl=$('kills'), comboEl=$('combo'), levelEl=$('lev
 // ---------- audio: tiny WebAudio synth, rate-limited SFX ----------
 const AudioSys = {
   ctx:null, master:null, noiseBuf:null, on:false, last:{}, bedGain:null, bedFilter:null,
+  musicTimer:null, musicStep:0, musicNext:0, musicOn:true, musicGain:null, musicFilter:null,
   init(){
     if(this.ctx) return;
     try{
@@ -256,26 +257,92 @@ const AudioSys = {
   },
   click(){ if(this.ok('clk',0.05)) this.tone('square', 880, 880, 0.05, 0.05); },
   startBed(){
-    if(!this.ctx || this.bedGain) return;
-    try{
-      const s = this.ctx.createBufferSource(), f = this.ctx.createBiquadFilter(), g = this.ctx.createGain();
-      s.buffer = this.noiseBuf; s.loop = true;
-      f.type='lowpass'; f.frequency.value = 240; f.Q.value = 0.6;
-      g.gain.value = 0.0;
-      s.connect(f); f.connect(g); g.connect(this.master); s.start();
-      this.bedGain = g; this.bedFilter = f;
-      const o = this.ctx.createOscillator(), og = this.ctx.createGain();
-      o.type='sine'; o.frequency.value = 55; og.gain.value = 0.05;
-      o.connect(og); og.connect(this.master); o.start();
-    }catch(e){}
+    if(!this.ctx) return;
+    if(!this.bedGain){
+      try{
+        const s = this.ctx.createBufferSource(), f = this.ctx.createBiquadFilter(), g = this.ctx.createGain();
+        s.buffer = this.noiseBuf; s.loop = true;
+        f.type='lowpass'; f.frequency.value = 240; f.Q.value = 0.6;
+        g.gain.value = 0.0;
+        s.connect(f); f.connect(g); g.connect(this.master); s.start();
+        this.bedGain = g; this.bedFilter = f;
+        const o = this.ctx.createOscillator(), og = this.ctx.createGain();
+        o.type='sine'; o.frequency.value = 55; og.gain.value = 0.05;
+        o.connect(og); og.connect(this.master); o.start();
+      }catch(e){}
+    }
+    this.startMusic();
+  },
+  /* ---------- background music: a small procedural synthwave loop ----------
+     No audio files, no network: a 112 BPM lookahead step-sequencer playing
+     bass + arpeggio + pad over Am-F-C-G, all through the same WebAudio
+     synth as the SFX. M toggles it; it starts with the bed and stops when
+     the round ends. */
+  mf(m){ return 440*Math.pow(2,(m-69)/12); }, // midi note -> Hz
+  MUSIC_BPM:112,
+  MUSIC_ROOTS:[45,41,48,43],            // A2 F2 C3 G2, one bar each
+  MUSIC_CHORDS:[[57,60,64],[53,57,60],[55,60,64],[55,59,62]],
+  MUSIC_ARP:[0,1,2,1,0,2,1,2,0,1,2,1,2,1,0,1],
+  mtone(type, f, dur, vol, delay, att){ // one music note, routed to the music bus
+    if(!this.ctx || !this.musicGain) return;
+    const t0 = this.ctx.currentTime + (delay||0);
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = type; o.frequency.setValueAtTime(Math.max(20,f), t0);
+    if(att){ g.gain.setValueAtTime(0.0008,t0); g.gain.exponentialRampToValueAtTime(vol,t0+att); }
+    else g.gain.setValueAtTime(vol,t0);
+    g.gain.exponentialRampToValueAtTime(0.0008, t0+dur);
+    o.connect(g); g.connect(this.musicGain); o.start(t0); o.stop(t0+dur+0.03);
+  },
+  scheduleStep(step, delay){
+    const bar = Math.floor(step/16)%4, s = step%16;
+    const root = this.MUSIC_ROOTS[bar], chord = this.MUSIC_CHORDS[bar];
+    if(s===0){ // pad: one long soft chord per bar
+      for(const n of chord) this.mtone('sine', this.mf(n), 1.9, 0.022, delay, 0.4);
+    }
+    if(s%4===0) this.mtone('sawtooth', this.mf(root), 0.24, 0.085, delay); // bass on the beat
+    this.mtone('triangle', this.mf(chord[this.MUSIC_ARP[s]]+12), 0.11, 0.032, delay); // 16th-note arp
+  },
+  startMusic(){
+    if(!this.ctx) return;
+    if(!this.musicGain){
+      const g = this.ctx.createGain(), f = this.ctx.createBiquadFilter();
+      f.type='lowpass'; f.frequency.value = 900; f.Q.value = 0.5;
+      g.gain.value = this.musicOn ? 0.5 : 0;
+      g.connect(f); f.connect(this.master);
+      this.musicGain = g; this.musicFilter = f;
+    } else {
+      this.musicGain.gain.setTargetAtTime(this.musicOn?0.5:0, this.ctx.currentTime, 0.1);
+    }
+    if(this.musicTimer) return;
+    this.musicStep = 0;
+    this.musicNext = this.ctx.currentTime + 0.06;
+    this.musicTimer = setInterval(()=>{
+      if(!this.ctx) return;
+      while(this.musicNext < this.ctx.currentTime + 0.15){
+        this.scheduleStep(this.musicStep, Math.max(0, this.musicNext - this.ctx.currentTime));
+        this.musicStep++;
+        this.musicNext += 60/this.MUSIC_BPM/4;
+      }
+    }, 40);
+  },
+  stopMusic(){
+    if(this.musicTimer){ clearInterval(this.musicTimer); this.musicTimer = null; }
+    if(this.musicGain){ try{ this.musicGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1); }catch(e){} }
+  },
+  toggleMusic(){
+    if(!this.musicGain) return this.musicOn; // music only exists once a round has started
+    this.musicOn = !this.musicOn;
+    this.musicGain.gain.setTargetAtTime(this.musicOn?0.5:0, this.ctx.currentTime, 0.05);
+    return this.musicOn;
   },
   setBed(intensity){ // 0..1: bed gets louder and brighter as the timer runs down
     if(!this.bedGain) return;
     const t = this.ctx.currentTime;
     this.bedGain.gain.setTargetAtTime(0.05 + intensity*0.13, t, 0.4);
     this.bedFilter.frequency.setTargetAtTime(240 + intensity*900, t, 0.4);
+    if(this.musicFilter) this.musicFilter.frequency.setTargetAtTime(700 + intensity*1600, t, 0.4);
   },
-  stopBed(){ if(this.bedGain){ try{ this.bedGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1); }catch(e){} } }
+  stopBed(){ if(this.bedGain){ try{ this.bedGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1); }catch(e){} } this.stopMusic(); }
 };
 </script>
 <script>
@@ -306,6 +373,7 @@ $('againBtn').addEventListener('click', ()=>{ AudioSys.click(); restartGame(); }
 $('retryBtn').addEventListener('click', ()=>{ AudioSys.click(); restartGame(); });
 
 function onKeyPress(code){
+  if(code==='KeyM'){ AudioSys.toggleMusic(); return; } // M mutes / unmutes the music
   if(G.state==='title' && (code==='Enter'||code==='Space')){ startGame(); return; }
   if((G.state==='end'||G.state==='gameover') && (code==='KeyR'||code==='Enter')){ restartGame(); return; }
   if(G.state==='upgrade'){
@@ -973,6 +1041,7 @@ window.__game = {
   get timeLeft(){ return G.timeLeft; }, get hp(){ return G.player?G.player.hp:0; },
   get enemies(){ return G.enemies.length; },
   get combo(){ return G.combo; }, get level(){ return G.level; },
+  get musicOn(){ return AudioSys.musicOn; }, get musicStep(){ return AudioSys.musicStep; },
   start: startGame, restart: restartGame,
   debugSkip(sec){ if(G.state==='playing'){ G.playTime += sec; } },
   debugHurt(n){ if(G.player){ G.player.hp = Math.max(0, G.player.hp-(n||100));
